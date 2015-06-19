@@ -1,0 +1,47 @@
+<?php
+
+/**
+ * @file
+ * Installing uc_velocity schema
+ */
+
+/**
+ * Implements hook_schema().
+ */
+function uc_velocity_schema() {
+    
+    $schema = array();
+
+    /* create custom table for velocity transaction detail */
+    $sql = 'create table if not exists uc_velocity_transactions (id int not null auto_increment, transaction_id varchar(220), transaction_status varchar(100) not null, order_id varchar(10) not null, response_obj text not null, primary key(id))';
+    Database::getConnection()->query($sql);
+
+    /* select refund order status if not exist then insert the order status into table */
+    $data = db_query("SELECT state FROM {uc_order_statuses} WHERE order_status_id = :order_status_id", array(':order_status_id' => 'refunded'))->fetchField();
+    if($data == '') {
+        db_insert('uc_order_statuses')->fields(array(
+            'order_status_id' => t('refunded'),
+            'title' => t('Velocity Refund'),   
+            'state' => t('refunded'),
+            'weight' => t('-30'),  
+            'locked' => 1,  
+          ))->execute();
+    } 
+
+    return $schema;
+}
+
+/**
+ * Implements hook_uninstall().
+ */
+function uc_velocity_uninstall() {
+    
+    /* change the order status locked for removable by admin*/
+    db_update('uc_order_statuses')->fields(array(
+      'locked' => 0,
+    ))->condition('order_status_id', 'refunded')->execute();
+
+    /* Delete varialbles from variable table */
+    db_delete('variable')->condition('name', 'uc_velocity_%', 'LIKE')->execute();
+  
+}

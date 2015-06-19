@@ -1,0 +1,1087 @@
+<?php 
+/**
+ * @file
+ * Integrates the nabvelocity.com Hosted Payment Pages service with Ubercart.
+ *
+ */
+
+/** Just authorize an amount on a credit card account. */
+define('UC_VELOCITY_AUTH_ONLY', 'authorize');
+
+/** Authorize and capture money all at once. */
+define('UC_VELOCITY_AUTH_CAPTURE', 'auth_capture');
+
+/** return by id money all at once. */
+define('UC_VELOCITY_RETURNBYID', 'retrunById');
+
+/** Name of encryption key file. */
+define('UC_VELOCITY_KEYFILE_NAME', 'uc_credit.key');
+
+/**
+ * Implements hook_init().
+ */
+function uc_velocity_init() {
+  global $conf;
+  $conf['i18n_variables'][] = 'uc_credit_fail_message';
+  $conf['i18n_variables'][] = 'uc_credit_policy';
+}
+
+/**
+ * Implements hook_help().
+ */
+function uc_velocity_help($path, $arg) {
+  switch ($path) {
+    case 'admin/store/orders/%/refund':
+      return '<p>' . t('Use this terminal to process credit card Refund through your velocity gateway.') . '</p>';
+  }
+}
+
+/**
+ * Implements hook_menu().
+ */
+function uc_velocity_menu() {
+
+    $items['admin/store/orders/%uc_order/refund'] = array(
+        'title callback' => 'uc_velocity_terminal_title',
+        'title arguments' => array(3),
+        'description' => 'Displays a form to process a refund.',
+        'page callback' => 'uc_velocity_terminal',
+        'page arguments' => array(3),
+        'access arguments' => array('process credit cards'),
+    );
+
+    return $items;
+}
+
+/**
+ * Title callback for admin/store/orders/%uc_order/refund.
+ */
+function uc_velocity_terminal_title($order) {    
+    return t('Refund Payment Via Velocity Gateway : Order @order_id', array('@order_id' => $order->order_id));
+}
+
+/**
+ * Page callback mapped to the url /admin/store/orders/%uc_order/refund
+ *
+ * @return array
+ */
+function uc_velocity_terminal($order) {
+    
+    global $base_url;
+    global $user;
+    $errMessage         = '';
+    $refund_amount      = 0;
+    $status_change_data = unserialize(base64_decode($_SESSION['ch_status']));
+    
+    /* save order comment */
+    if (empty($status_change_data['order_comment']) && !isset($_SESSION['flag'])) {
+        uc_order_comment_save($order->order_id, $user->uid, $status_change_data['order_comment'], 'order', $status_change_data['status']);
+    }
+
+    if($status_change_data['status'] == 'canceled' && !isset($_SESSION['flag'])) {
+        $_SESSION['flag'] = 'yes';
+        $changes = '<div class="item-list"><ul><li class="first last">Order status changed from <em class="placeholder">' . ucfirst($status_change_data['current_status']) . '</em> to <em class="placeholder">' . ucfirst($status_change_data['status']) . '</em>.</li></ul></div>';
+        // save log for order change.
+        db_insert('uc_order_log')->fields(array(
+            'order_id'      => $order->order_id,
+            'uid'           => $user->uid,
+            'changes'       => $changes,
+            'created'       => REQUEST_TIME
+        ))->execute();
+    }
+    
+    if ( isset($_POST['Process_Refund']) && $_POST['Process_Refund'] == 'Process Refund' ) {
+        // get the transaction id for refund.
+        $txnid = db_query("SELECT transaction_id FROM {uc_velocity_transactions} WHERE order_id = :order_id", array(':order_id' => $order->order_id))->fetchField();
+        if (!empty($txnid)) {
+            
+            $total_amount   = $order->line_items[0]['amount'];
+            $total_shipping = $order->line_items[1]['amount'];
+            if (isset($_POST['Refund_Amount']) && $_POST['Refund_Amount'] == '') {
+                $errMessage .= 'Please enter the refund amount';
+            } elseif ($_POST['Refund_Amount'] > $total_amount) {
+                $errMessage .= 'Maximum refund amount is ' . $total_amount;
+            } elseif (isset($_POST['Shipping_Amount']) && $_POST['Shipping_Amount'] == 1) {
+                $refund_amount += $_POST['Refund_Amount'] + $total_shipping;
+            } else {
+                $refund_amount += $_POST['Refund_Amount'];
+            }
+            
+            if ($errMessage == '') {
+                
+                module_load_include('php', 'uc_velocity', 'sdk/Velocity');
+                $identitytoken        = "PHNhbWw6QXNzZXJ0aW9uIE1ham9yVmVyc2lvbj0iMSIgTWlub3JWZXJzaW9uPSIxIiBBc3NlcnRpb25JRD0iXzdlMDhiNzdjLTUzZWEtNDEwZC1hNmJiLTAyYjJmMTAzMzEwYyIgSXNzdWVyPSJJcGNBdXRoZW50aWNhdGlvbiIgSXNzdWVJbnN0YW50PSIyMDE0LTEwLTEwVDIwOjM2OjE4LjM3OVoiIHhtbG5zOnNhbWw9InVybjpvYXNpczpuYW1lczp0YzpTQU1MOjEuMDphc3NlcnRpb24iPjxzYW1sOkNvbmRpdGlvbnMgTm90QmVmb3JlPSIyMDE0LTEwLTEwVDIwOjM2OjE4LjM3OVoiIE5vdE9uT3JBZnRlcj0iMjA0NC0xMC0xMFQyMDozNjoxOC4zNzlaIj48L3NhbWw6Q29uZGl0aW9ucz48c2FtbDpBZHZpY2U+PC9zYW1sOkFkdmljZT48c2FtbDpBdHRyaWJ1dGVTdGF0ZW1lbnQ+PHNhbWw6U3ViamVjdD48c2FtbDpOYW1lSWRlbnRpZmllcj5GRjNCQjZEQzU4MzAwMDAxPC9zYW1sOk5hbWVJZGVudGlmaWVyPjwvc2FtbDpTdWJqZWN0PjxzYW1sOkF0dHJpYnV0ZSBBdHRyaWJ1dGVOYW1lPSJTQUsiIEF0dHJpYnV0ZU5hbWVzcGFjZT0iaHR0cDovL3NjaGVtYXMuaXBjb21tZXJjZS5jb20vSWRlbnRpdHkiPjxzYW1sOkF0dHJpYnV0ZVZhbHVlPkZGM0JCNkRDNTgzMDAwMDE8L3NhbWw6QXR0cmlidXRlVmFsdWU+PC9zYW1sOkF0dHJpYnV0ZT48c2FtbDpBdHRyaWJ1dGUgQXR0cmlidXRlTmFtZT0iU2VyaWFsIiBBdHRyaWJ1dGVOYW1lc3BhY2U9Imh0dHA6Ly9zY2hlbWFzLmlwY29tbWVyY2UuY29tL0lkZW50aXR5Ij48c2FtbDpBdHRyaWJ1dGVWYWx1ZT5iMTVlMTA4MS00ZGY2LTQwMTYtODM3Mi02NzhkYzdmZDQzNTc8L3NhbWw6QXR0cmlidXRlVmFsdWU+PC9zYW1sOkF0dHJpYnV0ZT48c2FtbDpBdHRyaWJ1dGUgQXR0cmlidXRlTmFtZT0ibmFtZSIgQXR0cmlidXRlTmFtZXNwYWNlPSJodHRwOi8vc2NoZW1hcy54bWxzb2FwLm9yZy93cy8yMDA1LzA1L2lkZW50aXR5L2NsYWltcyI+PHNhbWw6QXR0cmlidXRlVmFsdWU+RkYzQkI2REM1ODMwMDAwMTwvc2FtbDpBdHRyaWJ1dGVWYWx1ZT48L3NhbWw6QXR0cmlidXRlPjwvc2FtbDpBdHRyaWJ1dGVTdGF0ZW1lbnQ+PFNpZ25hdHVyZSB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC8wOS94bWxkc2lnIyI+PFNpZ25lZEluZm8+PENhbm9uaWNhbGl6YXRpb25NZXRob2QgQWxnb3JpdGhtPSJodHRwOi8vd3d3LnczLm9yZy8yMDAxLzEwL3htbC1leGMtYzE0biMiPjwvQ2Fub25pY2FsaXphdGlvbk1ldGhvZD48U2lnbmF0dXJlTWV0aG9kIEFsZ29yaXRobT0iaHR0cDovL3d3dy53My5vcmcvMjAwMC8wOS94bWxkc2lnI3JzYS1zaGExIj48L1NpZ25hdHVyZU1ldGhvZD48UmVmZXJlbmNlIFVSST0iI183ZTA4Yjc3Yy01M2VhLTQxMGQtYTZiYi0wMmIyZjEwMzMxMGMiPjxUcmFuc2Zvcm1zPjxUcmFuc2Zvcm0gQWxnb3JpdGhtPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwLzA5L3htbGRzaWcjZW52ZWxvcGVkLXNpZ25hdHVyZSI+PC9UcmFuc2Zvcm0+PFRyYW5zZm9ybSBBbGdvcml0aG09Imh0dHA6Ly93d3cudzMub3JnLzIwMDEvMTAveG1sLWV4Yy1jMTRuIyI+PC9UcmFuc2Zvcm0+PC9UcmFuc2Zvcm1zPjxEaWdlc3RNZXRob2QgQWxnb3JpdGhtPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwLzA5L3htbGRzaWcjc2hhMSI+PC9EaWdlc3RNZXRob2Q+PERpZ2VzdFZhbHVlPnl3NVZxWHlUTUh5NUNjdmRXN01TV2RhMDZMTT08L0RpZ2VzdFZhbHVlPjwvUmVmZXJlbmNlPjwvU2lnbmVkSW5mbz48U2lnbmF0dXJlVmFsdWU+WG9ZcURQaUorYy9IMlRFRjNQMWpQdVBUZ0VDVHp1cFVlRXpESERwMlE2ZW92T2lhN0pkVjI1bzZjTk1vczBTTzRISStSUGRUR3hJUW9xa0paeEtoTzZHcWZ2WHFDa2NNb2JCemxYbW83NUFSWU5jMHdlZ1hiQUVVQVFCcVNmeGwxc3huSlc1ZHZjclpuUytkSThoc2lZZW4vT0VTOUdtZUpsZVd1WUR4U0xmQjZJZnd6dk5LQ0xlS0FXenBkTk9NYmpQTjJyNUJWQUhQZEJ6WmtiSGZwdUlablp1Q2l5OENvaEo1bHU3WGZDbXpHdW96VDVqVE0wU3F6bHlzeUpWWVNSbVFUQW5WMVVGMGovbEx6SU14MVJmdWltWHNXaVk4c2RvQ2IrZXpBcVJnbk5EVSs3NlVYOEZFSEN3Q2c5a0tLSzQwMXdYNXpLd2FPRGJJUFpEYitBPT08L1NpZ25hdHVyZVZhbHVlPjxLZXlJbmZvPjxvOlNlY3VyaXR5VG9rZW5SZWZlcmVuY2UgeG1sbnM6bz0iaHR0cDovL2RvY3Mub2FzaXMtb3Blbi5vcmcvd3NzLzIwMDQvMDEvb2FzaXMtMjAwNDAxLXdzcy13c3NlY3VyaXR5LXNlY2V4dC0xLjAueHNkIj48bzpLZXlJZGVudGlmaWVyIFZhbHVlVHlwZT0iaHR0cDovL2RvY3Mub2FzaXMtb3Blbi5vcmcvd3NzL29hc2lzLXdzcy1zb2FwLW1lc3NhZ2Utc2VjdXJpdHktMS4xI1RodW1icHJpbnRTSEExIj5ZREJlRFNGM0Z4R2dmd3pSLzBwck11OTZoQ2M9PC9vOktleUlkZW50aWZpZXI+PC9vOlNlY3VyaXR5VG9rZW5SZWZlcmVuY2U+PC9LZXlJbmZvPjwvU2lnbmF0dXJlPjwvc2FtbDpBc3NlcnRpb24+";
+                $applicationprofileid = 14644;  // applicationprofileid provided velocity
+                if(is_null(variable_get('uc_velocity_test'))) {
+                    drupal_set_message( 'Must be first configure the velocity payment gateway credential', 'error' );
+                    return FALSE;
+                }
+                
+                if (variable_get('uc_velocity_test')) {
+                    $workflowid        = '2317000001';
+                    $merchantprofileid = 'PrestaShop Global HC';
+                    $isTestAccount     = TRUE;
+                } else {
+                    $workflowid        = variable_get('uc_velocity_workflowid');
+                    $merchantprofileid = variable_get('uc_velocity_merchantprofileid');
+                    $isTestAccount     = FALSE;
+                }
+                
+                try {            
+                    $velocityProcessor = new VelocityProcessor( $applicationprofileid, $merchantprofileid, $workflowid, $isTestAccount, $identitytoken );    
+                } catch (Exception $e) {
+                    drupal_set_message( $e->getMessage(), 'error' );
+                }
+                
+                try {
+                    // request for refund
+                    $response = $velocityProcessor->returnById(array(  
+                        'amount'        => $refund_amount,
+                        'TransactionId' => $txnid
+                    ));
+                    
+                    if ( is_array($response) && !empty($response) && isset($response['Status']) && $response['Status'] == 'Successful') {
+                        
+                        // save transaction detail in velocity transaction custom table.
+                        db_insert('uc_velocity_transactions')->fields(array(
+                            'transaction_id'     => $response['TransactionId'],
+                            'transaction_status' => $response['Status'],
+                            'order_id'           => $order->order_id,
+                            'response_obj'       => json_encode($response)
+                        ))->execute();
+                
+                        // Build an admin order comment.
+                        $comment = t('<b>Type: @type</b><br /><b>Status: @status</b><br />Amount: @amount',
+                        array('@type' => UC_VELOCITY_RETURNBYID, '@status' => $response['Status'], '@amount' => uc_currency_format($response['Amount']) ));
+
+                        // Save the comment to the order.
+                        uc_order_comment_save($order->order_id, $user->uid, $comment, 'admin');
+                        
+                        if($status_change_data['status'] == 'refunded') {
+                            $changes = '<div class="item-list"><ul><li class="first last">Order status changed from <em class="placeholder">' . ucfirst($status_change_data['current_status']) . '</em> to <em class="placeholder">Velocity Refund</em>.</li></ul></div>';
+                        } else {
+                            $changes = '<div class="item-list"><ul><li class="first last">Order status changed from <em class="placeholder">' . ucfirst($status_change_data['status']) . '</em> to <em class="placeholder">Velocity Refund</em>.</li></ul></div>';
+                        
+                            uc_order_comment_save($order->order_id, $user->uid, $status_change_data['order_comment'], 'order', 'refunded');
+
+                        }   
+                        
+                        // Save log for order change.
+                        db_insert('uc_order_log')->fields(array(
+                            'order_id' => $order->order_id,
+                            'uid'      => $user->uid,
+                            'changes'  => $changes,
+                            'created'  => REQUEST_TIME
+                        ))->execute();
+                        
+                        $data    = serialize(array('module' => 'uc_velocity', 'txn_type' => UC_VELOCITY_RETURNBYID, 'txn_id' => $response['TransactionId'], 'txn_authcode' => $response['ApprovalCode']));
+                        $comment = t('Type: @type<br />Txn ID: @id', array('@type' => UC_VELOCITY_RETURNBYID, '@id' => $response['TransactionId']));
+                        
+                        // Save log for order change.
+                        db_insert('uc_payment_receipts')->fields(array(
+                            'order_id' => $order->order_id,
+                            'method'   => t('Velocity'),
+                            'amount'   => $response['Amount'],
+                            'uid'      => $user->uid,
+                            'data'     => $data,
+                            'comment'  => $comment,
+                            'received' => REQUEST_TIME
+                        ))->execute();
+                        
+                        unset($_SESSION['flag']);
+                        unset($_SESSION['ch_status']);
+                        $_SESSION['msg'] = 'Your payment has been refunded successfully!';
+                        drupal_goto("/admin/store/orders/" . $order->order_id);
+                        
+                    } else if ( is_array($response) && !empty($response) ) {
+                        drupal_set_message($response['StatusMessage'], 'error');
+                    } else {
+                        drupal_set_message('Unknown Error please contact the site admin', 'error');
+                    }
+                    
+                } catch(Exception $e) {
+                    drupal_set_message( $e->getMessage(), 'error' );
+                }    
+
+            } else {
+                drupal_set_message($errMessage, 'error');
+            }
+            
+        } else {
+            drupal_set_message('This order payment not done by the velocity gateway.', 'error');
+        }
+
+    }
+
+    $url = $base_url . "/admin/store/orders/" . $order->order_id;
+    $form = array( 'refund_form' => array(
+        '#type'   => 'form',
+        '#action' => '',
+        ),
+    );
+    $form['refund_form']['refund_amount'] = array(
+        '#type'        => 'textfield',
+        '#title'       => t('Refund Amount'),
+        '#name'        => t('Refund_Amount'),
+        '#description' => t('Amount for refund process through velocity gateway'),
+        '#size'        => 15,  
+        '#maxlength'   => 15,
+        '#required'    => True,
+    );
+    $form['refund_form']['shipping_amount'] = array(
+        '#type'        => 'checkbox',
+        '#title'       => t('Shipping Amount'),
+        '#name'        => t('Shipping_Amount'),
+        '#description' => t('if you want to refund shipping amount select the chackbox'),
+    );
+    $form['refund_form']['process_refund'] = array(
+        '#type'        => 'submit',
+        '#name'        => t('Process_Refund'),
+        '#title'       => t('Process Refund'),
+        '#description' => t('if you want to refund shipping amount select the chackbox'),
+        '#value'       => t('Process Refund'), 
+    );
+    $form['refund_form']['not_now'] = array(
+        '#type'        => 'button',
+        '#id'          => t('Not_Now'),
+        '#name'        => t('Not_Now'),
+        '#title'       => t('Not Now'),
+        '#description' => t('if you want to refund shipping amount select the chackbox'),
+        '#value'       => t('Not Now'),
+    );  
+    $form['#attached']['js'] = array(
+        drupal_get_path('module', 'uc_velocity') . '/cc_payment.js',
+    );
+    return $form;
+}
+
+/**
+ * Implements hook_exit().
+ */
+function uc_velocity_exit() {
+  // Make sure sensitive checkout session data doesn't persist on other pages.
+  if (isset($_SESSION['sescrd'])) {
+    if (isset($_GET['q'])) {
+      // Separate the args ourself since the arg() function may not be loaded.
+      $args = explode('/', $_GET['q']);
+      if (!isset($args[1]) || $args[1] != 'checkout') {
+        unset($_SESSION['sescrd']);
+      }
+    }
+    else {
+      unset($_SESSION['sescrd']);
+    }
+  }
+}
+
+/**
+ * Implements hook_uc_payment_gateway().
+ */
+function uc_velocity_uc_payment_gateway() {
+    $gateways['velocity'] = array(
+      'title'            => t('Velocity'),
+      'description'      => t('Process credit card payments via Velocity gateway.'),
+      'settings'         => '', 
+      'credit'           => 'uc_velocity_charge',
+      'credit_txn_types' => array(UC_VELOCITY_AUTH_CAPTURE),
+    );
+    return $gateways;
+}
+
+function uc_velocity_charge($order_id, $amount, $data) {
+    
+    global $user;
+    // Load the order.
+    $order = uc_order_load($order_id);
+    module_load_include('php', 'uc_velocity', 'sdk/Velocity');
+    $identitytoken        = "PHNhbWw6QXNzZXJ0aW9uIE1ham9yVmVyc2lvbj0iMSIgTWlub3JWZXJzaW9uPSIxIiBBc3NlcnRpb25JRD0iXzdlMDhiNzdjLTUzZWEtNDEwZC1hNmJiLTAyYjJmMTAzMzEwYyIgSXNzdWVyPSJJcGNBdXRoZW50aWNhdGlvbiIgSXNzdWVJbnN0YW50PSIyMDE0LTEwLTEwVDIwOjM2OjE4LjM3OVoiIHhtbG5zOnNhbWw9InVybjpvYXNpczpuYW1lczp0YzpTQU1MOjEuMDphc3NlcnRpb24iPjxzYW1sOkNvbmRpdGlvbnMgTm90QmVmb3JlPSIyMDE0LTEwLTEwVDIwOjM2OjE4LjM3OVoiIE5vdE9uT3JBZnRlcj0iMjA0NC0xMC0xMFQyMDozNjoxOC4zNzlaIj48L3NhbWw6Q29uZGl0aW9ucz48c2FtbDpBZHZpY2U+PC9zYW1sOkFkdmljZT48c2FtbDpBdHRyaWJ1dGVTdGF0ZW1lbnQ+PHNhbWw6U3ViamVjdD48c2FtbDpOYW1lSWRlbnRpZmllcj5GRjNCQjZEQzU4MzAwMDAxPC9zYW1sOk5hbWVJZGVudGlmaWVyPjwvc2FtbDpTdWJqZWN0PjxzYW1sOkF0dHJpYnV0ZSBBdHRyaWJ1dGVOYW1lPSJTQUsiIEF0dHJpYnV0ZU5hbWVzcGFjZT0iaHR0cDovL3NjaGVtYXMuaXBjb21tZXJjZS5jb20vSWRlbnRpdHkiPjxzYW1sOkF0dHJpYnV0ZVZhbHVlPkZGM0JCNkRDNTgzMDAwMDE8L3NhbWw6QXR0cmlidXRlVmFsdWU+PC9zYW1sOkF0dHJpYnV0ZT48c2FtbDpBdHRyaWJ1dGUgQXR0cmlidXRlTmFtZT0iU2VyaWFsIiBBdHRyaWJ1dGVOYW1lc3BhY2U9Imh0dHA6Ly9zY2hlbWFzLmlwY29tbWVyY2UuY29tL0lkZW50aXR5Ij48c2FtbDpBdHRyaWJ1dGVWYWx1ZT5iMTVlMTA4MS00ZGY2LTQwMTYtODM3Mi02NzhkYzdmZDQzNTc8L3NhbWw6QXR0cmlidXRlVmFsdWU+PC9zYW1sOkF0dHJpYnV0ZT48c2FtbDpBdHRyaWJ1dGUgQXR0cmlidXRlTmFtZT0ibmFtZSIgQXR0cmlidXRlTmFtZXNwYWNlPSJodHRwOi8vc2NoZW1hcy54bWxzb2FwLm9yZy93cy8yMDA1LzA1L2lkZW50aXR5L2NsYWltcyI+PHNhbWw6QXR0cmlidXRlVmFsdWU+RkYzQkI2REM1ODMwMDAwMTwvc2FtbDpBdHRyaWJ1dGVWYWx1ZT48L3NhbWw6QXR0cmlidXRlPjwvc2FtbDpBdHRyaWJ1dGVTdGF0ZW1lbnQ+PFNpZ25hdHVyZSB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC8wOS94bWxkc2lnIyI+PFNpZ25lZEluZm8+PENhbm9uaWNhbGl6YXRpb25NZXRob2QgQWxnb3JpdGhtPSJodHRwOi8vd3d3LnczLm9yZy8yMDAxLzEwL3htbC1leGMtYzE0biMiPjwvQ2Fub25pY2FsaXphdGlvbk1ldGhvZD48U2lnbmF0dXJlTWV0aG9kIEFsZ29yaXRobT0iaHR0cDovL3d3dy53My5vcmcvMjAwMC8wOS94bWxkc2lnI3JzYS1zaGExIj48L1NpZ25hdHVyZU1ldGhvZD48UmVmZXJlbmNlIFVSST0iI183ZTA4Yjc3Yy01M2VhLTQxMGQtYTZiYi0wMmIyZjEwMzMxMGMiPjxUcmFuc2Zvcm1zPjxUcmFuc2Zvcm0gQWxnb3JpdGhtPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwLzA5L3htbGRzaWcjZW52ZWxvcGVkLXNpZ25hdHVyZSI+PC9UcmFuc2Zvcm0+PFRyYW5zZm9ybSBBbGdvcml0aG09Imh0dHA6Ly93d3cudzMub3JnLzIwMDEvMTAveG1sLWV4Yy1jMTRuIyI+PC9UcmFuc2Zvcm0+PC9UcmFuc2Zvcm1zPjxEaWdlc3RNZXRob2QgQWxnb3JpdGhtPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwLzA5L3htbGRzaWcjc2hhMSI+PC9EaWdlc3RNZXRob2Q+PERpZ2VzdFZhbHVlPnl3NVZxWHlUTUh5NUNjdmRXN01TV2RhMDZMTT08L0RpZ2VzdFZhbHVlPjwvUmVmZXJlbmNlPjwvU2lnbmVkSW5mbz48U2lnbmF0dXJlVmFsdWU+WG9ZcURQaUorYy9IMlRFRjNQMWpQdVBUZ0VDVHp1cFVlRXpESERwMlE2ZW92T2lhN0pkVjI1bzZjTk1vczBTTzRISStSUGRUR3hJUW9xa0paeEtoTzZHcWZ2WHFDa2NNb2JCemxYbW83NUFSWU5jMHdlZ1hiQUVVQVFCcVNmeGwxc3huSlc1ZHZjclpuUytkSThoc2lZZW4vT0VTOUdtZUpsZVd1WUR4U0xmQjZJZnd6dk5LQ0xlS0FXenBkTk9NYmpQTjJyNUJWQUhQZEJ6WmtiSGZwdUlablp1Q2l5OENvaEo1bHU3WGZDbXpHdW96VDVqVE0wU3F6bHlzeUpWWVNSbVFUQW5WMVVGMGovbEx6SU14MVJmdWltWHNXaVk4c2RvQ2IrZXpBcVJnbk5EVSs3NlVYOEZFSEN3Q2c5a0tLSzQwMXdYNXpLd2FPRGJJUFpEYitBPT08L1NpZ25hdHVyZVZhbHVlPjxLZXlJbmZvPjxvOlNlY3VyaXR5VG9rZW5SZWZlcmVuY2UgeG1sbnM6bz0iaHR0cDovL2RvY3Mub2FzaXMtb3Blbi5vcmcvd3NzLzIwMDQvMDEvb2FzaXMtMjAwNDAxLXdzcy13c3NlY3VyaXR5LXNlY2V4dC0xLjAueHNkIj48bzpLZXlJZGVudGlmaWVyIFZhbHVlVHlwZT0iaHR0cDovL2RvY3Mub2FzaXMtb3Blbi5vcmcvd3NzL29hc2lzLXdzcy1zb2FwLW1lc3NhZ2Utc2VjdXJpdHktMS4xI1RodW1icHJpbnRTSEExIj5ZREJlRFNGM0Z4R2dmd3pSLzBwck11OTZoQ2M9PC9vOktleUlkZW50aWZpZXI+PC9vOlNlY3VyaXR5VG9rZW5SZWZlcmVuY2U+PC9LZXlJbmZvPjwvU2lnbmF0dXJlPjwvc2FtbDpBc3NlcnRpb24+";
+    $applicationprofileid = 14644;  // applicationprofileid provided velocity
+
+    if(is_null(variable_get('uc_velocity_test'))) {
+        drupal_set_message( 'Must be first configure the velocity payment gateway credential', 'error' );
+        return FALSE;
+    }
+    
+    if (variable_get('uc_velocity_test')) {
+        $workflowid        = '2317000001';
+        $merchantprofileid = 'PrestaShop Global HC';
+        $isTestAccount     = TRUE;
+    } else {
+        $workflowid        = variable_get('uc_velocity_workflowid');
+        $merchantprofileid = variable_get('uc_velocity_merchantprofileid');
+        $isTestAccount     = FALSE;
+    }  
+    
+    try {            
+        $velocityProcessor = new VelocityProcessor( $applicationprofileid, $merchantprofileid, $workflowid, $isTestAccount, $identitytoken );    
+    } catch (Exception $e) {
+        drupal_set_message( $e->getMessage(), 'error' );
+    }
+
+    $totals  = number_format($order->order_total, 2, '.', '');
+    $orderId = $order->order_id;
+
+    $key = uc_velocity_encryption_key();
+    $crypt = new UbercartEncryption();
+    $cc_data = unserialize(base64_decode($crypt->decrypt($key , base64_decode($_POST['sescrd']))));
+
+    $avsData = array (
+        'Street'        => $order->billing_street1 . ' ' . $order->billing_street2,
+        'City'          => $order->billing_city,
+        'StateProvince' => '',
+        'PostalCode'    => $order->billing_postal_code,
+        'Country'       => 'USA'
+     );
+
+    $cardData = array(
+        'cardtype'    => str_replace(' ', '', $cc_data['cc_type']), 
+        'pan'         => $cc_data['cc_number'], 
+        'expire'      => sprintf("%02d", $cc_data['cc_exp_month']).substr($cc_data['cc_exp_year'], -2), 
+        'cvv'         => $cc_data['cc_cvv'],
+        'track1data'  => '', 
+        'track2data'  => ''
+    );
+
+    /* Request for the verify avsdata and card data*/
+    try {        
+        $response = $velocityProcessor->verify(array(  
+            'amount'       => $totals,
+            'avsdata'      => $avsData, 
+            'carddata'     => $cardData,
+            'entry_mode'   => 'Keyed',
+            'IndustryType' => 'Ecommerce',
+            'Reference'    => 'xyz',
+            'EmployeeId'   => '11'
+        ));
+
+    } catch (Exception $e) {
+        drupal_set_message($e->getMessage(), 'error');
+    }
+
+    if (is_array($response) && isset($response['Status']) && $response['Status'] == 'Successful') {
+
+        /* Request for the authrizeandcapture transaction */
+        try {
+            $cap_response = $velocityProcessor->authorizeAndCapture( array(
+                'amount'       => $totals, 
+                'avsdata'      => $avsData,
+                'token'        => $response['PaymentAccountDataToken'], 
+                'order_id'     => $orderId,
+                'entry_mode'   => 'Keyed',
+                'IndustryType' => 'Ecommerce',
+                'Reference'    => 'xyz',
+                'EmployeeId'   => '11'
+            ));
+
+            if ( is_array($cap_response) && !empty($cap_response) && isset($cap_response['Status']) && $cap_response['Status'] == 'Successful') {
+
+                /* save the authandcap response into 'uc_velocity_transactions' custom table.*/    
+                db_insert('uc_velocity_transactions')->fields(array(
+                    'transaction_id'     => $cap_response['TransactionId'],
+                    'transaction_status' => $cap_response['Status'],
+                    'order_id'           => $orderId,
+                    'response_obj'       => json_encode($cap_response)
+                    ))->execute();
+
+                /* Build a message for display and comments in the payments table. */
+                $message = t('Type: @type<br />Txn ID: @id', array('@type' => UC_VELOCITY_AUTH_CAPTURE, '@id' => $cap_response['TransactionId']));
+                $result = array(
+                  'success' => TRUE,
+                  'comment' => $message,
+                  'message' => '',
+                  'data'    => array('module' => 'uc_velocity', 'txn_type' => UC_VELOCITY_AUTH_CAPTURE, 'txn_id' => $cap_response['TransactionId'], 'txn_authcode' => $cap_response['ApprovalCode']),
+                  'uid'     => $user->uid,
+                );
+                
+                uc_velocity_log_prior_auth_capture($order->order_id, NULL);
+                
+                // Build an admin order comment.
+                $comment = t('Type: @type, Status: @status, Message: @message, Amount: @amount',
+                  array('@type' => UC_VELOCITY_AUTH_CAPTURE, '@status' => $result['success'] ? t('ACCEPTED') : t('REJECTED'), '@message' => $cap_response['StatusMessage'], '@amount' => uc_currency_format($cap_response['Amount'])));
+
+                // Save the comment to the order.
+                uc_order_comment_save($order->order_id, $user->uid, $comment, 'order');
+                
+                return $result;
+                
+            } else if ( is_array($cap_response) && !empty($cap_response) ) {
+                $result = array(
+                    'success' => FALSE,
+                    'message' => t('Credit card payment declined: @message', array('@message' => $cap_response['StatusMessage'])),
+                    'uid'     => $user->uid,
+                  );
+            } else {
+                $result = array(
+                    'success' => FALSE,
+                    'message' => t('Credit card payment declined: @message', array('@message' => $cap_response)),
+                    'uid'     => $user->uid,
+                  );
+            }
+        } catch(Exception $e) {
+            $result = array(
+                    'success' => FALSE,
+                    'message' => t('Credit card payment declined: @message', array('@message' => $e->getMessage())),
+                    'uid'     => $user->uid,
+             );
+        }
+
+
+    } else if (is_array($response) &&(isset($response['Status']) && $response['Status'] != 'Successful')) {
+        $result = array(
+                    'success' => FALSE,
+                    'message' => t('Credit card payment declined: @message', array('@message' => $response['StatusMessage'])),
+                    'uid'     => $user->uid,
+        );
+    } else {
+        $result = array(
+                    'success' => FALSE,
+                    'message' => t('Credit card payment declined: @message', array('@message' => 'Unknown Error please contact the site admin')),
+                    'uid'     => $user->uid,
+        );
+    }
+    return $result;
+}
+
+
+/**
+ * Implements hook_uc_payment_method().
+ */
+function uc_velocity_uc_payment_method() {
+
+    $methods['velocity'] = array(
+        'name'     => t('velocity'),
+        'title'    => t('Credit card payment - secured by velocity'),
+        'desc'     => t('Pay by credit card.'),
+        'callback' => 'uc_payment_method_velocity',
+        'weight'   => 1,
+        'checkout' => TRUE,
+    );
+    return $methods;
+}
+
+/**
+ * Callback function for the Credit Card payment method.
+ */
+function uc_payment_method_velocity($op, &$order, $form = NULL, &$form_state = NULL) {
+    
+    switch ($op) {
+        case 'cart-details':
+            $details = uc_payment_method_velocity_form(array(), $form_state, $order);
+            return $details;
+
+        case 'cart-process':
+            if (!isset($form_state['values']['panes']['payment']['details']['cc_number'])) {
+              return;
+            }
+            // Fetch the CC details from the $_POST directly.
+            $cc_data = $form_state['values']['panes']['payment']['details'];
+
+            $cc_data['cc_number'] = str_replace(' ', '', $cc_data['cc_number']);
+
+            array_walk($cc_data, 'check_plain');
+
+            // Recover cached CC data in
+            // $form_state['values']['panes']['payment']['details'] if it exists.
+            if (isset($form_state['values']['panes']['payment']['details']['payment_details_data'])) {
+                $cache = uc_credit_cache('save', $form_state['values']['panes']['payment']['details']['payment_details_data']);
+            }
+
+            // Go ahead and put the CC data in the payment details array.
+            $order->payment_details = $cc_data;
+
+            // Default our value for validation.
+            $return = TRUE;
+
+            // Make sure an owner value was entered.
+            if (empty($cc_data['cc_owner'])) {
+                form_set_error('panes][payment][details][cc_owner', t('Enter the owner name as it appears on the card.'));
+                $return = FALSE;
+            }
+
+            // Validate the CC number if that's turned on/check for non-digits.
+            if (!_uc_velocity_valid_card_number($cc_data['cc_number']) || !ctype_digit($cc_data['cc_number'])) {
+                form_set_error('panes][payment][details][cc_number', t('You have entered an invalid credit card number.'));
+                $return = FALSE;
+            }
+
+            // Validate the card expiration date.
+            if (!_uc_velocity_valid_card_expiration($cc_data['cc_exp_month'], $cc_data['cc_exp_year'])) {
+                form_set_error('panes][payment][details][cc_exp_month', t('The credit card you entered has expired.'));
+                form_set_error('panes][payment][details][cc_exp_year');
+                $return = FALSE;
+            }
+
+            // Validate the CVV number if enabled.
+            if (!_uc_velocity_valid_cvv($cc_data['cc_cvv'])) {
+                form_set_error('panes][payment][details][cc_cvv', t('You have entered an invalid CVV number.'));
+                $return = FALSE;
+            }
+
+            $key = uc_velocity_encryption_key();
+            $crypt = new UbercartEncryption();
+            // Store the encrypted details in the session for the next pageload.
+            // We are using base64_encode() because the encrypt function works with a
+            // limited set of characters, not supporting the full Unicode character
+            // set or even extended ASCII characters that may be present.
+            // base64_encode() converts everything to a subset of ASCII, ensuring that
+            // the encryption algorithm does not mangle names.
+            $_SESSION['sescrd'] = $crypt->encrypt($key , base64_encode(serialize($order->payment_details)));
+            
+            // Log any errors to the watchdog.
+            uc_store_encryption_errors($crypt, 'uc_credit');
+
+            // If we're going to the review screen, set a variable that lets us know
+            // we're paying by CC.
+            if ($return) {
+                $_SESSION['cc_pay'] = TRUE;
+            }
+
+            return $return;
+
+        case 'cart-review':
+
+            if(isset($_SESSION['sescrd'])) {
+                $key = uc_velocity_encryption_key();
+                $crypt = new UbercartEncryption();
+                $order->payment_details = unserialize(base64_decode($crypt->decrypt($key, $_SESSION['sescrd'])));
+                $review[] = array('title' => t('Card type'), 'data' => check_plain($order->payment_details['cc_type']));
+                $review[] = array('title' => t('Card owner'), 'data' => check_plain($order->payment_details['cc_owner']));
+                $review[] = array('title' => t('Card number'), 'data' => uc_velocity_display_number($order->payment_details['cc_number']));
+                $review[] = array('title' => t('Expiration'), 'data' => $order->payment_details['cc_exp_month'] . '/' . $order->payment_details['cc_exp_year']);
+
+                return $review;
+            } else {
+                return NULL;  
+            } 
+
+        case 'order-view':
+           // this section use for admin view an order
+            $build = array();
+
+            return $build;
+
+        case 'customer-view':
+            // this section use for customer view our order
+            $build = array();
+
+            if (!empty($order->payment_details['cc_number'])) {
+                $build['#markup'] = t('Card number') . ':<br />' . uc_credit_display_number($order->payment_details['cc_number']);
+            }
+
+            return $build;
+
+        case 'order-details': 
+            
+            return t('Use the terminal available through the<br />%button button on the View tab to<br />process credit card payments.', array('%button' => t('Process card Velocity')));
+
+        case 'settings':
+            // for admin configuration form
+            form_load_include($form_state, 'inc', 'uc_velocity', 'uc_velocity.admin');
+            return uc_velocity_settings_form($form, $form_state);
+    }
+}
+
+/**
+ * Displays the credit card details form on the checkout screen.
+ */
+function uc_payment_method_velocity_form($form, &$form_state, $order) {
+     
+    // Normally the CC data is posted in via AJAX.
+    if (!empty($form_state['values']['payment_details_data']) && arg(0) == 'cart') {
+        $order->payment_details = uc_velocity_cache('save', $form_state['values']['payment_details_data']);
+    }
+
+    // But we have to accommodate failed checkout form validation here.
+    if (isset($_SESSION['sescrd'])) {
+        $order->payment_details = uc_velocity_cache('save', $_SESSION['sescrd']);
+        unset($_SESSION['sescrd']);
+    }
+
+    if (!isset($order->payment_details) && isset($form_state['values']['panes']['payment']['details'])) {
+        $order->payment_details = $form_state['values']['panes']['payment']['details'];
+        $order->payment_details['cc_number'] = str_replace(' ', '', $order->payment_details['cc_number']);
+    }
+
+    if (!isset($order->payment_details)) {
+        $order->payment_details = array();
+    }
+     
+    $form['#attached']['css'] = array(
+        drupal_get_path('module', 'uc_velocity') . '/uc_payment.css',
+    );
+
+    $types = array('Visa' => t('Visa'), 'MasterCard' => t('MasterCard'), 'Discover' => t('Discover'), 'AmericanExpress' => t('American Express'));
+
+    // Set up the card type choose on credit card form.
+    if ($types) {
+        $form['cc_type'] = array(
+            '#type'          => 'select',
+            '#title'         => t('Card type'),
+            '#options'       => drupal_map_assoc($types),
+            '#default_value' => isset($order->payment_details['cc_type']) ? $order->payment_details['cc_type'] : NULL,
+        );
+    }
+
+    // Set up the card owner name on the credit card form.
+    $form['cc_owner'] = array(
+        '#type'          => 'textfield',
+        '#title'         => t('Card owner'),
+        '#default_value' => isset($order->payment_details['cc_owner']) ? $order->payment_details['cc_owner'] : '',
+        '#attributes'    => array('autocomplete' => 'off'),
+        '#size'          => 32,  
+        '#maxlength'     => 64,
+    );
+
+    // Set up the default CC number on the credit card form.
+    if (isset($_SESSION['clear_cc']) || !isset($order->payment_details['cc_number'])) {
+        $default_num = NULL;
+    }
+    elseif (!_uc_velocity_valid_card_number($order->payment_details['cc_number'])) {
+        // Display the number as is if it does not validate so it can be corrected.
+        $default_num = $order->payment_details['cc_number'];
+    }
+    else {
+        // Otherwise default to the last 4 digits.
+        $default_num = t('(Last 4) ') . substr($order->payment_details['cc_number'], -4);
+    }
+
+    // Set up the card number on the credit card form.
+    $form['cc_number'] = array(
+        '#type'          => 'textfield',
+        '#title'         => t('Card number'),
+        '#default_value' => $default_num,
+        '#attributes'    => array('autocomplete' => 'off'),
+        '#size'          => 20,
+        '#maxlength'     => 19,
+    );
+
+    if (variable_get('uc_credit_start_enabled', FALSE)) {
+        $month = isset($order->payment_details['cc_start_month']) ? $order->payment_details['cc_start_month'] : NULL;
+        $year = isset($order->payment_details['cc_start_year']) ? $order->payment_details['cc_start_year'] : NULL;
+        $form['cc_start_month'] = uc_select_month(t('Start date'), $month, TRUE);
+        $form['cc_start_year']  = uc_select_year(t('Start year'), $year, date('Y') - 10, date('Y'), TRUE);
+        $form['cc_start_year']['#field_suffix'] = t('(if present)');
+    }
+
+    $month = isset($order->payment_details['cc_exp_month']) ? $order->payment_details['cc_exp_month'] : 1;
+    $year = isset($order->payment_details['cc_exp_year']) ? $order->payment_details['cc_exp_year'] : date('Y');
+    $form['cc_exp_month'] = uc_select_month(t('Expiration date'), $month);
+    $form['cc_exp_year']  = uc_select_year(t('Expiration year'), $year);
+
+    // Set up the default CVV  on the credit card form.
+    if (isset($_SESSION['clear_cc']) || empty($order->payment_details['cc_cvv'])) {
+        $default_cvv = NULL;
+    }
+    elseif (!_uc_velocity_valid_cvv($order->payment_details['cc_cvv'])) {
+        // Display the CVV as is if it does not validate so it can be corrected.
+        $default_cvv = $order->payment_details['cc_cvv'];
+    }
+    else {
+        // Otherwise mask it with dashes.
+        $default_cvv = str_repeat('-', strlen($order->payment_details['cc_cvv']));
+    }
+
+    $form['cc_cvv'] = array(
+        '#type'          => 'textfield',
+        '#title'         => t('CVV'),
+        '#default_value' => $default_cvv,
+        '#attributes'    => array('autocomplete' => 'off'),
+        '#size'          => variable_get('uc_credit_amex', TRUE) ? 4 : 3,
+        '#maxlength'     => variable_get('uc_credit_amex', TRUE) ? 4 : 3,
+    );
+
+    unset($_SESSION['clear_cc']);
+
+    return $form;
+}
+
+
+/**
+ * Implements hook_form_FORM_ID_alter() for uc_cart_checkout_review_form().
+ */
+function uc_velocity_form_uc_cart_checkout_review_form_alter(&$form, &$form_state) {
+
+    // Add submit handler to preserve CC details for the back button and
+    // failed order submissions.
+    $form['actions']['back']['#submit'][] = 'uc_velocity_cart_review_back_submit';
+
+    // Reconstruct the submit handler array for before and after processing.
+    $submit   = array_merge(array('uc_velocity_cart_review_pre_form_submit'), $form['#submit']);
+    $submit[] = 'uc_velocity_cart_review_post_form_submit';
+
+    $form['#submit'] = $submit;
+
+    unset($_SESSION['sescrd']);
+}
+
+
+/**
+ * Caches the encrypted CC data on the review order form for processing.
+ */
+function uc_velocity_cart_review_back_submit($form, &$form_state) {
+    $session_card_data  = base64_decode($_POST['sescrd']);
+    $_SESSION['sescrd'] = $session_card_data;
+    uc_velocity_cache('save', $session_card_data);
+}
+
+/**
+ * Caches the encrypted CC data on the review order form for processing.
+ */
+function uc_velocity_cart_review_pre_form_submit($form, &$form_state) {
+    $session_card_data  = base64_decode($_POST['sescrd']);
+    $_SESSION['sescrd'] = $session_card_data;
+    uc_velocity_cache('save', $session_card_data);
+}
+
+
+/**
+ * Clears the temporary CC data if the review order form submits.
+ */
+function uc_velocity_cart_review_post_form_submit($form, &$form_state) {
+
+    if (!empty($_SESSION['uc_checkout'][$_SESSION['cart_order']]['do_complete'])) {
+        // Otherwise stuff it back in the session for the next pageload.
+        unset($_SESSION['sescrd']);
+    }
+    
+}
+
+
+/**
+ * Builds the "Process Card" button on the order view.
+ *
+ * @see uc_velocity_order_view_form_submit()
+ */
+function uc_velocity_order_view_form($form, &$form_state, $order_id) {
+    $form['order_id'] = array(
+        '#type'  => 'hidden',
+        '#value' => $order_id,
+    );
+    $form['actions'] = array('#type' => 'actions');
+    $form['actions']['submit'] = array(
+        '#type'  => 'submit',
+        '#value' => t('Process card'),
+    );
+    return $form;
+}
+
+/**
+ * Submit handler for order view form.
+ *
+ * @see uc_velocity_order_view_form()
+ */
+function uc_velocity_order_view_form_submit($form, &$form_state) {
+    $form_state['redirect'] = url('admin/store/orders/' . $form_state['values']['order_id'] . '/credit');
+}
+
+/**
+ * Returns a credit card number with appropriate masking.
+ */
+function uc_velocity_display_number($number) {
+    if (strlen($number) == 4) {
+        return t('(Last 4) ') . $number;
+    }
+    return str_repeat('X', 12) . substr($number, -4);
+}
+
+
+/**
+ * Validates a credit card number during checkout.
+ *
+ */
+function _uc_velocity_valid_card_number($number) {
+    $id = substr($number, 0, 1);
+    if (($id == 3 && !variable_get('uc_credit_amex', TRUE)) ||
+        ($id == 4 && !variable_get('uc_credit_visa', TRUE)) ||
+        ($id == 5 && !variable_get('uc_credit_mastercard', TRUE)) ||
+        ($id == 6 && !variable_get('uc_credit_discover', TRUE)) ||
+        !ctype_digit($number)) {
+        return FALSE;
+    }
+
+    $total = 0;
+    for ($i = 0; $i < strlen($number); $i++) {
+        $digit = substr($number, $i, 1);
+        if ((strlen($number) - $i - 1) % 2) {
+            $digit *= 2;
+            if ($digit > 9) {
+                $digit -= 9;
+            }
+        }
+        $total += $digit;
+    }
+
+    if ($total % 10 != 0) {
+        return FALSE;
+    }
+
+    return TRUE;
+}
+
+/**
+ * Validates an expiration date on a card.
+ *
+ * @param $month
+ *   The 1 or 2-digit numeric representation of the month, i.e. 1, 6, 12.
+ * @param $year
+ *   The 4-digit numeric representation of the year, i.e. 2008.
+ *
+ * @return
+ *   TRUE for non-expired cards, FALSE for expired.
+ */
+function _uc_velocity_valid_card_expiration($month, $year) {
+    if ($year < date('Y')) {
+        return FALSE;
+    }
+    elseif ($year == date('Y')) {
+        if ($month < date('n')) {
+          return FALSE;
+        }
+    }
+    return TRUE;
+}
+
+/**
+ * Validates a CVV number during checkout.
+ */
+function _uc_velocity_valid_cvv($cvv) {
+    $digits = array();
+
+    if (variable_get('uc_credit_visa', TRUE) ||
+        variable_get('uc_credit_mastercard', TRUE) ||
+        variable_get('uc_credit_discover', TRUE)) {
+        $digits[] = 3;
+    }
+    if (variable_get('uc_credit_amex', TRUE)) {
+        $digits[] = 4;
+    }
+
+    // Fail validation if it's non-numeric or an incorrect length.
+    if (!is_numeric($cvv) || (count($digits) > 0 && !in_array(strlen($cvv), $digits))) {
+        return FALSE;
+    }
+
+    return TRUE;
+}
+
+/**
+ * Implements hook_uc_order().
+ */
+function uc_velocity_uc_order($op, $order, $arg2) {
+
+    // Set up the encryption key and object for saving and loading.
+    if (isset($order->payment_method) && $order->payment_method == 'velocity' && ($op == 'save' || $op == 'load')) {
+      // Log an error if encryption isn't configured properly.
+      if (!uc_velocity_encryption_key()) {
+        watchdog('uc_velocity', 'Credit card encryption must be set up to process credit cards.');
+      }
+    }
+    global $base_url;     
+    switch ($op) {
+        case 'submit':
+            if (isset($order->payment_method) && $order->payment_method == 'velocity') {
+                // Clear out that session variable denoting this as a CC paid order.
+                unset($_SESSION['cc_pay']);
+
+                // Process CC transactions when an order is submitted after review.
+                $gateway_id = uc_velocity_default_gateway();
+
+                $data = array(
+                    'txn_type' => variable_get('uc_pg_' . $gateway_id . '_cc_txn_type', UC_VELOCITY_AUTH_CAPTURE),
+                );        
+
+                $pass = uc_payment_process_payment('credit', $order->order_id, $order->order_total, $data, FALSE, 'velocity', FALSE);
+
+                // If the payment failed, store the data back in the session and
+                // halt the checkout process.
+                if (!$pass) {
+                    $message = variable_get('uc_credit_fail_message', t('We were unable to process your credit card payment. Please verify your details and try again.  If the problem persists, contact us to complete your order.'));
+                    return array(array('pass' => FALSE, 'message' => $message));
+                }
+            }
+            break;
+
+        case 'save':
+            if (isset($order->payment_method) && $order->payment_method == 'velocity' && !empty($order->payment_details['cc_number'])) {
+                _uc_velocity_save_cc_data_to_order($order->payment_details, $order->order_id);
+            }
+            break;
+
+        case 'load': 
+            if (isset($order->payment_method) && $order->payment_method == 'velocity') {
+                // display and usset the message of successful refund
+                if (isset($_SESSION['msg']) && !empty($_SESSION['msg'])) {
+                    drupal_set_message( $_SESSION['msg'] );
+                    unset($_SESSION['msg']);
+                }
+
+                // Load the CC details from the credit cache if available.
+                $order->payment_details = uc_velocity_cache('load');
+
+                // Otherwise load any details that might be stored in the data array.
+                if (empty($order->payment_details) && isset($order->data['cc_data'])) {
+                    $order->payment_details = uc_velocity_cache('save', $order->data['cc_data']);
+                }
+            }
+            break;
+
+        case 'update':
+            if (isset($order->payment_method) && $order->payment_method == 'velocity') {
+                if($arg2 == 'canceled' || $arg2 == 'refunded') {
+                    $_SESSION['ch_status'] = base64_encode(serialize($_POST));
+                    drupal_goto("admin/store/orders/" . $order->order_id . "/refund");
+                }
+            }
+            break; 
+ 
+    }
+}
+
+/**
+ * Retrieves the ID of the velocity credit card gateway.
+ *
+ * @return
+ *   A string containing the ID of the velocity gateway or FALSE if none exists
+ *   or none have valid credit callbacks.
+ */
+function uc_velocity_default_gateway() {
+    // Get an array of enabled payment gateways available for the payment method.
+    $gateways = _uc_payment_gateway_list('credit', TRUE);
+
+    // Return FALSE if we found no gateways.
+    if (empty($gateways)) {
+          return FALSE;
+    }
+
+    // Find the default gateway, or otherwise choose the first available.
+    $gateway = isset($gateways['velocity']) ? $gateways['velocity'] : reset($gateways);
+
+    // Return FALSE if the credit callback does not exist.
+    return function_exists($gateway['credit']) ? $gateway['id'] : FALSE;
+}
+
+
+/**
+ * Loads the key for CC number encryption from a file.
+ *
+ * Path to key file is stored in system variable 'uc_credit_encryption_path'.
+ * Key file name is stored in constant UC_CREDIT_KEYFILE_NAME.
+ *
+ * @return
+ *   FALSE if no encryption key is found.
+ */
+function uc_velocity_encryption_key() {
+    static $key = FALSE;
+
+    if (empty($key)) {
+        $key_file = variable_get('uc_credit_encryption_path', '') . '/' . UC_VELOCITY_KEYFILE_NAME;
+
+        $contents = @file_get_contents($key_file);
+        if (strlen($contents) == 32) {
+            $key = $contents;
+        }
+    }
+
+    return $key;
+}
+
+/**
+ * Saves a CC data array to an order's data array.
+ */
+function _uc_velocity_save_cc_data_to_order($cc_data, $order_id) {
+  // Save only some limited, PCI compliant data.
+  $cc_data['cc_number'] = substr($cc_data['cc_number'], -4);
+  unset($cc_data['cc_cvv']);
+
+  // Load up the existing data array.
+  $data = db_query("SELECT data FROM {uc_orders} WHERE order_id = :id", array(':id' => $order_id))->fetchField();
+  
+  $data = unserialize($data);
+
+  // Stuff the serialized and encrypted CC details into the array.
+  $crypt = new UbercartEncryption();
+  $data['cc_data'] = $crypt->encrypt(uc_velocity_encryption_key(), base64_encode(serialize($cc_data)));
+  uc_store_encryption_errors($crypt, 'uc_velocity');
+
+  // Save it again.
+  db_update('uc_orders')
+    ->fields(array('data' => serialize($data)))
+    ->condition('order_id', $order_id)
+    ->execute();
+}
+
+
+/**
+ * Logs the capture of a prior authorization to an order's data array.
+ *
+ * @param $order_id
+ *   The order associated with the credit card capture.
+ * @param $auth_id
+ *   The payment service's ID for the authorization that was captured.
+ *
+ * @return
+ *   The entire updated data array for the order or FALSE to indicate the
+ *   specified authorization was not found.
+ */
+function uc_velocity_log_prior_auth_capture($order_id, $auth_id) {
+    // Load the existing order data array.
+    $data = db_query("SELECT data FROM {uc_orders} WHERE order_id = :id", array(':id' => $order_id))->fetchField();
+    $data = unserialize($data);
+
+    // Return FALSE if we can't find the authorization.
+    if (empty($data['cc_txns']['authorizations'][$auth_id])) {
+      return FALSE;
+    }
+
+    // Otherwise log the capture timestamp to the authorization.
+    $data['cc_txns']['authorizations'][$auth_id]['captured'] = REQUEST_TIME;
+
+    // Save the updated data array to the database.
+    db_update('uc_orders')
+      ->fields(array('data' => serialize($data)))
+      ->condition('order_id', $order_id)
+      ->execute();
+
+    return $data;
+}
+
+/**
+ * Caches CC details on a pageload for use in various functions.
+ *
+ * @param $op
+ *   The cache operation to perform; either 'save', 'load', or 'clear'.
+ * @param $data
+ *   The encrypted, serialized string containing the CC data.
+ *
+ * @return
+ *   An array of credit card details.
+ */
+function uc_velocity_cache($op, $data = NULL, $encrypted = TRUE) {
+    // The CC data will be stored in this static variable.
+    static $cc_cache = array();
+
+    if ($op == 'save') {
+        if ($encrypted) {
+            // Initialize the encryption key and class.
+            $key = uc_velocity_encryption_key();
+            $crypt = new UbercartEncryption();
+
+            // Save the unencrypted CC details for the duration of this request.
+            // In recent versions, we base64_encode() the payment details before
+            // encrypting. We can detect encoded data by the lack of colons,
+            // due to base64's limited character set.
+            $data = $crypt->decrypt($key, $data);
+            if (strpos($data, ':') === FALSE) {
+                $data = base64_decode($data);
+            }
+            $cc_cache = @unserialize($data);
+        }
+        else {
+            $cc_cache = $data;
+        }
+    }
+    elseif ($op == 'clear') {
+        $cc_cache = array();
+    }
+    return $cc_cache;
+}
