@@ -21,19 +21,19 @@ define('UC_VELOCITY_KEYFILE_NAME', 'uc_credit.key');
  * Implements hook_init().
  */
 function uc_velocity_init() {
-  global $conf;
-  $conf['i18n_variables'][] = 'uc_credit_fail_message';
-  $conf['i18n_variables'][] = 'uc_credit_policy';
+    global $conf;
+    $conf['i18n_variables'][] = 'uc_credit_fail_message';
+    $conf['i18n_variables'][] = 'uc_credit_policy';
 }
 
 /**
  * Implements hook_help().
  */
 function uc_velocity_help($path, $arg) {
-  switch ($path) {
-    case 'admin/store/orders/%/refund':
-      return '<p>' . t('Use this terminal to process credit card Refund through your velocity gateway.') . '</p>';
-  }
+    switch ($path) {
+      case 'admin/store/orders/%/refund':
+        return '<p>' . t('Use this terminal to process credit card Refund through your velocity gateway.') . '</p>';
+    }
 }
 
 /**
@@ -73,13 +73,8 @@ function uc_velocity_terminal($order) {
     $refund_amount      = 0;
     $status_change_data = unserialize(base64_decode($_SESSION['ch_status']));
     
-    /* save order comment */
-    if (empty($status_change_data['order_comment']) && !isset($_SESSION['flag'])) {
-        uc_order_comment_save($order->order_id, $user->uid, $status_change_data['order_comment'], 'order', $status_change_data['status']);
-    }
-
-    if($status_change_data['status'] == 'canceled' && !isset($_SESSION['flag'])) {
-        $_SESSION['flag'] = 'yes';
+    if (isset($status_change_data['status']) && $status_change_data['status'] == 'canceled' && !isset($_SESSION['flag'])) {
+        
         $changes = '<div class="item-list"><ul><li class="first last">Order status changed from <em class="placeholder">' . ucfirst($status_change_data['current_status']) . '</em> to <em class="placeholder">' . ucfirst($status_change_data['status']) . '</em>.</li></ul></div>';
         // save log for order change.
         db_insert('uc_order_log')->fields(array(
@@ -88,6 +83,18 @@ function uc_velocity_terminal($order) {
             'changes'       => $changes,
             'created'       => REQUEST_TIME
         ))->execute();
+    }
+    
+    if (isset($status_change_data['status']) && $status_change_data['status'] == 'refunded') {
+        db_update('uc_orders')->fields(array(
+              'order_status' => $status_change_data['current_status'],
+            ))->condition('order_id', $order->order_id, '=')->execute();
+    }
+    
+    /* save order comment */
+    if (empty($status_change_data['order_comment']) && isset($status_change_data['status']) && $status_change_data['status'] == 'canceled' && !isset($_SESSION['flag'])) {
+        $_SESSION['flag'] = 'yes';
+        uc_order_comment_save($order->order_id, $user->uid, $status_change_data['order_comment'], 'order', $status_change_data['status']);
     }
     
     if ( isset($_POST['Process_Refund']) && $_POST['Process_Refund'] == 'Process Refund' ) {
@@ -157,13 +164,18 @@ function uc_velocity_terminal($order) {
                         // Save the comment to the order.
                         uc_order_comment_save($order->order_id, $user->uid, $comment, 'admin');
                         
-                        if($status_change_data['status'] == 'refunded') {
+                        if(isset($status_change_data['status']) && $status_change_data['status'] === 'refunded') {    
                             $changes = '<div class="item-list"><ul><li class="first last">Order status changed from <em class="placeholder">' . ucfirst($status_change_data['current_status']) . '</em> to <em class="placeholder">Velocity Refund</em>.</li></ul></div>';
+                            uc_order_comment_save($order->order_id, $user->uid, $status_change_data['order_comment'], 'order', $status_change_data['status']);
+                            db_update('uc_orders')->fields(array(
+                                'order_status' => $status_change_data['status'],
+                              ))->condition('order_id', $order->order_id, '=')->execute();
                         } else {
                             $changes = '<div class="item-list"><ul><li class="first last">Order status changed from <em class="placeholder">' . ucfirst($status_change_data['status']) . '</em> to <em class="placeholder">Velocity Refund</em>.</li></ul></div>';
-                        
                             uc_order_comment_save($order->order_id, $user->uid, $status_change_data['order_comment'], 'order', 'refunded');
-
+                            db_update('uc_orders')->fields(array(
+                                'order_status' => 'refunded',
+                              ))->condition('order_id', $order->order_id, '=')->execute();    
                         }   
                         
                         // Save log for order change.
@@ -642,7 +654,7 @@ function uc_payment_method_velocity_form($form, &$form_state, $order) {
     }
     else {
         // Otherwise default to the last 4 digits.
-        $default_num = t('(Last 4) ') . substr($order->payment_details['cc_number'], -4);
+        $default_num = $order->payment_details['cc_number'];
     }
 
     // Set up the card number on the credit card form.
@@ -678,7 +690,7 @@ function uc_payment_method_velocity_form($form, &$form_state, $order) {
     }
     else {
         // Otherwise mask it with dashes.
-        $default_cvv = str_repeat('-', strlen($order->payment_details['cc_cvv']));
+        $default_cvv = $order->payment_details['cc_cvv'];
     }
 
     $form['cc_cvv'] = array(
@@ -855,12 +867,10 @@ function _uc_velocity_valid_cvv($cvv) {
     if (variable_get('uc_credit_amex', TRUE)) {
         $digits[] = 4;
     }
-
     // Fail validation if it's non-numeric or an incorrect length.
-    if (!is_numeric($cvv) || (count($digits) > 0 && !in_array(strlen($cvv), $digits))) {
+    if (!is_numeric($cvv) || (strlen((int)$cvv) != strlen($cvv)) || (count($digits) > 0 && !in_array(strlen($cvv), $digits))) {
         return FALSE;
     }
-
     return TRUE;
 }
 
