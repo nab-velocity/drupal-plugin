@@ -13,7 +13,7 @@ function uc_velocity_schema() {
     $schema = array();
 
     /* create custom table for velocity transaction detail */
-    $sql = 'create table if not exists uc_velocity_transactions (id int not null auto_increment, transaction_id varchar(220), transaction_status varchar(100) not null, order_id varchar(10) not null, response_obj text not null, primary key(id))';
+    $sql = 'create table if not exists {uc_velocity_transactions} (id int not null auto_increment, transaction_id varchar(220), transaction_status varchar(100) not null, order_id varchar(10) not null, response_obj text not null, primary key(id))';
     Database::getConnection()->query($sql);
 
     /* select refund order status if not exist then insert the order status into table */
