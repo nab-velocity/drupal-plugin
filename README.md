@@ -16,9 +16,11 @@
     For configuration click on 'store' menu and then click on 'Payment methods' our payment module listed there then click on 'settings' show 'Save velocity credential for live payment' click on that then display configuration form put velocity credential and save.
 
     VELOCITY CREDENTIAL DETAILS
-    1.	WorkFlowId/ServiceId: - This is provided by velocity to merchant.
-    2.	MerchantProfileId: - This is provided by velocity to merchant.
-    3.	Test Mode :- This is for test the module, if select checkbox for test mode enable and no need to save “WorkFlowId/ServiceId & MerchantProfileId” otherwise unchecked the checkbox and save “WorkFlowId/ServiceId & MerchantProfileId” for live payment.
+    1.	IdentityToken - This is security Token provided by velocity to merchant.
+    2.	WorkFlowId/ServiceId: - This is service id provided by velocity to merchant.
+    3.	ApplicationProfileId: - This is application id provided by velocity to merchant.
+    4.	MerchantProfileId: - This is merchant id provided by velocity to merchant.
+    5.	Test Mode :- This is for test the module, if select checkbox for test mode enable and no need to save “WorkFlowId/ServiceId & MerchantProfileId” otherwise unchecked the checkbox and save “WorkFlowId/ServiceId & MerchantProfileId” for live payment.
 
     For Refund option at admin side first open 'Store' and then 'View Orders' and click on perticular order refund is process after change the order status to 'canceled' or 'Velocity Refund' shows the refund form with refund shipping checkbox then put amount and 'Process Refund' or 'Not Now'.
 
