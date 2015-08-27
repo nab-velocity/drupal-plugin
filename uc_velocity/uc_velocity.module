@@ -228,9 +228,10 @@ function uc_velocity_terminal($order) {
     }
 
     $url = $base_url . "/admin/store/orders/" . $order->order_id;
+    $ac_url = url('admin/store/orders/'.$order->order_id.'/refund');
     $form = array( 'refund_form' => array(
         '#type'   => 'form',
-        '#action' => '',
+        '#action' => $ac_url,
         ),
     );
     $form['refund_form']['refund_amount'] = array(
