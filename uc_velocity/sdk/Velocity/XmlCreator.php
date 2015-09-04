@@ -121,7 +121,7 @@ class VelocityXmlCreator {
 			$n2 = $xml->createElement("bcp:CardData");
 			$n1->appendChild($n2);
 			VelocityXmlCreator::populate_XML_element_if_array_value_isset('cardtype', "bcp:CardType", $xml, $n2, $data['carddata']);
-                        if( $data['carddata']['track1data'] != '' || $data['carddata']['track2data'] != '') {
+                        if ($data['carddata']['track1data'] != '' || $data['carddata']['track2data'] != '') {
                             VelocityXmlCreator::populate_XML_element_if_array_value_isset('track1data', "bcp:Track1Data", $xml, $n2, $data['carddata']);
                             VelocityXmlCreator::populate_XML_element_if_array_value_isset('track2data', "bcp:Track2Data", $xml, $n2, $data['carddata']);
                         } else {

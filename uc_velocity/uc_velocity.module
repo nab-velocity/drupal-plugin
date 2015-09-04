@@ -149,6 +149,11 @@ function uc_velocity_terminal($order) {
                         'TransactionId' => $txnid
                     ));
                     
+                    $xml = VelocityXmlCreator::returnByIdXML(number_format($refund_amount, 2, '.', ''), $txnid);  // got ReturnById xml object.  
+
+                    $req = $xml->saveXML();
+                    $obj_req = serialize($req);
+                    
                     if ( is_array($response) && !empty($response) && isset($response['Status']) && $response['Status'] == 'Successful') {
                         
                         // save transaction detail in velocity transaction custom table.
@@ -156,6 +161,7 @@ function uc_velocity_terminal($order) {
                             'transaction_id'     => $response['TransactionId'],
                             'transaction_status' => $response['Status'],
                             'order_id'           => $order->order_id,
+                            'request_obj'        => $obj_req,
                             'response_obj'       => json_encode($response)
                         ))->execute();
                 
@@ -370,6 +376,19 @@ function uc_velocity_charge($order_id, $amount, $data) {
             'Reference'    => 'xyz',
             'EmployeeId'   => '11'
         ));
+        
+         $xml = VelocityXmlCreator::authorizeandcaptureXML(array(  
+            'amount'       => $totals,
+            'avsdata'      => $avsData, 
+            'carddata'     => $cardData,
+            'entry_mode'   => 'Keyed',
+            'IndustryType' => 'Ecommerce',
+            'Reference'    => 'xyz',
+            'EmployeeId'   => '11'
+        ));  // got authorizeandcapture xml object. 
+
+        $req = $xml->saveXML();
+        $obj_req = serialize($req);
 
     } catch (Exception $e) {
         drupal_set_message($e->getMessage(), 'error');
@@ -397,7 +416,8 @@ function uc_velocity_charge($order_id, $amount, $data) {
                     'transaction_id'     => $cap_response['TransactionId'],
                     'transaction_status' => $cap_response['Status'],
                     'order_id'           => $orderId,
-                    'response_obj'       => json_encode($cap_response)
+                    'request_obj'        => $obj_req,
+                    'response_obj'       => serialize($cap_response)
                     ))->execute();
 
                 /* Build a message for display and comments in the payments table. */

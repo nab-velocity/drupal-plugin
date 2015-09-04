@@ -1,5 +1,4 @@
 <?php
-
 /**
  * @file
  * Installing uc_velocity schema
@@ -12,10 +11,26 @@ function uc_velocity_schema() {
     
     $schema = array();
 
-    /* create custom table for velocity transaction detail */
-    $sql = 'create table if not exists {uc_velocity_transactions} (id int not null auto_increment, transaction_id varchar(220), transaction_status varchar(100) not null, order_id varchar(10) not null, response_obj text not null, primary key(id))';
-    Database::getConnection()->query($sql);
+    $tableexist = db_query("show tables like '%velocity%'")->fetchField();
 
+    if($tableexist) {
+        $existfield = db_field_exists('{uc_velocity_transactions}', 'request_obj');
+        if (!$existfield) {
+            db_add_field('{uc_velocity_transactions}', 'request_obj', array('type' => 'text', 'not null' => FALSE, 'description' => 'Field added by velocity module',));
+        }
+        
+    } else {
+        /* create custom table for velocity transaction detail */
+        $sql = 'create table {uc_velocity_transactions} (
+                id int not null auto_increment, 
+                transaction_id varchar(220), 
+                transaction_status varchar(100) not null, 
+                order_id varchar(10) not null, 
+                request_obj  text not null,
+                response_obj text not null, 
+                primary key(id))';
+        Database::getConnection()->query($sql);
+    }
     /* select refund order status if not exist then insert the order status into table */
     $data = db_query("SELECT state FROM {uc_order_statuses} WHERE order_status_id = :order_status_id", array(':order_status_id' => 'refunded'))->fetchField();
     if($data == '') {
