@@ -25,3 +25,5 @@
     For Refund option at admin side first open 'Store' and then 'View Orders' and click on perticular order refund is process after change the order status to 'canceled' or 'Velocity Refund' shows the refund form with refund shipping checkbox then put amount and 'Process Refund' or 'Not Now'.
 
     For uninstall the velocity module of Drupal goto Modules Menu option then uncheck the module and save configuration our module listed in uninstall tab then select and uninstall the module.
+	
+	4. We have saved the raw request and response objects in &lt;prefix&gt;_velocity_transactions table.
