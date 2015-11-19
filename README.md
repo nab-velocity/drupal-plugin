@@ -1,15 +1,17 @@
 Velocity Drupal Module Installation Documentation 
 
-1.	Download velocity Drupal Module by clicking on Download zip button on the right bottom of this page.
+1.	Configuration Requirement: Drupal site Version 7.3 or above version must be required for our velocity payment module installation.
 
-2.	Configuration Requirement: Drupal site Version 7.3 or above version must be required for our velocity payment module installation.
+2.	Download velocity Drupal Module by clicking on Download zip button on the right bottom of this page.
 
-3.	Installation & Configuration of Module from Admin Panel:
+3.  Extract the zip and re-zip the folder 'uc_velocity' (inside the extracted folder). 
+
+4.	Installation & Configuration of Module from Admin Panel:
 	  Login Drupal admin panel and click on Modules Menu option then then click on 'Install new module'.
 
 Show two option for add the module one for online by url and other one is upload maudule zipped file and all installed module listed bellow.
 
-Click on “Browse” option and select zipped module file from system then Click on “Install” button for upload the module in Drupal module section and listed in “MODULES LIST” below.
+Click on “Browse” option and select 'uc_velocity' zipped module file from system then Click on “Install” button for upload the module in Drupal module section and listed in “MODULES LIST” below.
 
 After Successful installation, show module enable option click on that otherwise select module and click on 'save configuration' button.
 
@@ -26,4 +28,4 @@ For Refund option at admin side first open 'Store' and then 'View Orders' and cl
 
 For uninstall the velocity module of Drupal goto Modules Menu option then uncheck the module and save configuration our module listed in uninstall tab then select and uninstall the module.
 
-4. We have saved the raw request and response objects in &lt;prefix&gt;_velocity_transactions table.
+5. We have saved the raw request and response objects in &lt;prefix&gt;_velocity_transactions table.
