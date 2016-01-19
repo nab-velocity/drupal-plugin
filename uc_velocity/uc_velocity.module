@@ -368,19 +368,6 @@ function uc_velocity_charge($order_id, $amount, $data) {
             'Reference'    => 'xyz',
             'EmployeeId'   => '11'
         ));
-        
-         $xml = VelocityXmlCreator::authorizeandcaptureXML(array(  
-            'amount'       => $totals,
-            'avsdata'      => $avsData, 
-            'carddata'     => $cardData,
-            'entry_mode'   => 'Keyed',
-            'IndustryType' => 'Ecommerce',
-            'Reference'    => 'xyz',
-            'EmployeeId'   => '11'
-        ));  // got authorizeandcapture xml object. 
-
-        $req = $xml->saveXML();
-        $obj_req = serialize($req);
 
     } catch (Exception $e) {
         drupal_set_message($e->getMessage(), 'error');
@@ -390,6 +377,21 @@ function uc_velocity_charge($order_id, $amount, $data) {
 
         /* Request for the authrizeandcapture transaction */
         try {
+            
+            $xml = VelocityXmlCreator::authorizeandcaptureXML(array(  
+                'amount'       => $totals, 
+                'avsdata'      => $avsData,
+                'token'        => $response['PaymentAccountDataToken'], 
+                'order_id'     => $orderId,
+                'entry_mode'   => 'Keyed',
+                'IndustryType' => 'Ecommerce',
+                'Reference'    => 'xyz',
+                'EmployeeId'   => '11'
+            ));  // got authorizeandcapture xml object. 
+
+            $req = $xml->saveXML();
+            $obj_req = serialize($req);
+        
             $cap_response = $velocityProcessor->authorizeAndCapture( array(
                 'amount'       => $totals, 
                 'avsdata'      => $avsData,
@@ -400,7 +402,7 @@ function uc_velocity_charge($order_id, $amount, $data) {
                 'Reference'    => 'xyz',
                 'EmployeeId'   => '11'
             ));
-
+            //echo '<pre>';            print_r($cap_response); die;
             if ( is_array($cap_response) && !empty($cap_response) && isset($cap_response['Status']) && $cap_response['Status'] == 'Successful') {
 
                 /* save the authandcap response into 'uc_velocity_transactions' custom table.*/    
